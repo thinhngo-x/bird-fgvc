@@ -6,6 +6,9 @@ import torch.optim as optim
 from torchvision import datasets
 from torch.autograd import Variable
 from tqdm import tqdm
+import torch
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter()
 
 # Training settings
 parser = argparse.ArgumentParser(description='RecVis A3 training script')
@@ -13,11 +16,11 @@ parser.add_argument('--data', type=str, default='bird_dataset', metavar='D',
                     help="folder where data is located. train_images/ and val_images/ need to be found in the folder")
 parser.add_argument('--batch-size', type=int, default=64, metavar='B',
                     help='input batch size for training (default: 64)')
-parser.add_argument('--epochs', type=int, default=10, metavar='N',
+parser.add_argument('--epochs', type=int, default=30, metavar='N',
                     help='number of epochs to train (default: 10)')
-parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
+parser.add_argument('--lr', type=float, default=0.05, metavar='LR',
                     help='learning rate (default: 0.01)')
-parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
+parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                     help='SGD momentum (default: 0.5)')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
@@ -34,11 +37,11 @@ if not os.path.isdir(args.experiment):
     os.makedirs(args.experiment)
 
 # Data initialization and loading
-from data import data_transforms
+from data import data_transforms, train_data_transforms
 
 train_loader = torch.utils.data.DataLoader(
     datasets.ImageFolder(args.data + '/train_images',
-                         transform=data_transforms),
+                         transform=train_data_transforms),
     batch_size=args.batch_size, shuffle=True, num_workers=1)
 val_loader = torch.utils.data.DataLoader(
     datasets.ImageFolder(args.data + '/val_images',
@@ -47,15 +50,15 @@ val_loader = torch.utils.data.DataLoader(
 
 # Neural network and optimizer
 # We define neural net in model.py so that it can be reused by the evaluate.py script
-from model import Net
-model = Net()
+from model import DenseNet, Net, ResNet, EfficientNet
+model = ResNet('resnext101_32x8d', pretrained=True)
 if use_cuda:
     print('Using GPU')
     model.cuda()
 else:
     print('Using CPU')
 
-optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
 def train(epoch):
     model.train()
@@ -72,8 +75,11 @@ def train(epoch):
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.data.item()))
+    writer.add_scalar("Loss/train", loss.data.item(), epoch)
+    writer.flush()
 
-def validation():
+
+def validation(epoch):
     model.eval()
     validation_loss = 0
     correct = 0
@@ -89,6 +95,8 @@ def validation():
         correct += pred.eq(target.data.view_as(pred)).cpu().sum()
 
     validation_loss /= len(val_loader.dataset)
+    writer.add_scalar("Loss/val", validation_loss, epoch)
+    writer.add_scalar("Eval/val", 100. * correct / len(val_loader.dataset), epoch)
     print('\nValidation set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)'.format(
         validation_loss, correct, len(val_loader.dataset),
         100. * correct / len(val_loader.dataset)))
@@ -96,7 +104,7 @@ def validation():
 
 for epoch in range(1, args.epochs + 1):
     train(epoch)
-    validation()
+    validation(epoch)
     model_file = args.experiment + '/model_' + str(epoch) + '.pth'
     torch.save(model.state_dict(), model_file)
     print('Saved model to ' + model_file + '. You can run `python evaluate.py --model ' + model_file + '` to generate the Kaggle formatted csv file\n')

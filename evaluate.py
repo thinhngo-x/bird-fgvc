@@ -5,7 +5,7 @@ import PIL.Image as Image
 
 import torch
 
-from model import Net
+from model import Net, ResNet
 
 parser = argparse.ArgumentParser(description='RecVis A3 evaluation script')
 parser.add_argument('--data', type=str, default='bird_dataset', metavar='D',
@@ -19,7 +19,7 @@ args = parser.parse_args()
 use_cuda = torch.cuda.is_available()
 
 state_dict = torch.load(args.model)
-model = Net()
+model = ResNet('resnext101_32x8d', pretrained=False)
 model.load_state_dict(state_dict)
 model.eval()
 if use_cuda:
