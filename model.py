@@ -46,6 +46,11 @@ class ResNet(nn.Module):
     def forward(self, x):
         x = self.net(x)
         return x
+    
+    def extract_feats(self, x):
+        modules = list(self.net.children())[:-1]
+        extrtor = nn.Sequential(*modules)
+        return extrtor(x)
 
 
 class MaskVC(nn.Module):
