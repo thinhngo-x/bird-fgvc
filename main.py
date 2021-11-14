@@ -1,6 +1,7 @@
 import argparse
 from inspect import getblock
 import os
+from sklearn.utils import shuffle
 import torch
 from torch import random
 import torch.nn as nn
@@ -20,13 +21,13 @@ writer = SummaryWriter()
 parser = argparse.ArgumentParser(description='RecVis A3 training script')
 parser.add_argument('--data', type=str, default='bird_dataset', metavar='D',
                     help="folder where data is located. train_images/ and val_images/ need to be found in the folder")
-parser.add_argument('--batch-size', type=int, default=64, metavar='B',
-                    help='input batch size for training (default: 64)')
+parser.add_argument('--batch-size', type=int, default=20, metavar='B',
+                    help='input batch size for training (default: 32)')
 parser.add_argument('--epochs', type=int, default=30, metavar='N',
                     help='number of epochs to train (default: 10)')
 parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
                     help='learning rate (default: 0.01)')
-parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
+parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                     help='SGD momentum (default: 0.5)')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
@@ -34,6 +35,12 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging training status')
 parser.add_argument('--experiment', type=str, default='experiment', metavar='E',
                     help='folder where experiment outputs are located.')
+parser.add_argument('--lambda-u', default=1, type=float,
+                    help='coefficient of unlabeled loss')
+parser.add_argument('--threshold', default=0.95, type=float,
+                    help='pseudo label threshold')
+parser.add_argument('--mu', default=2, type=int,
+                    help='coefficient of unlabeled batch size')
 args = parser.parse_args()
 use_cuda = torch.cuda.is_available()
 torch.manual_seed(args.seed)
@@ -43,16 +50,32 @@ if not os.path.isdir(args.experiment):
     os.makedirs(args.experiment)
 
 # Data initialization and loading
-from data import data_transforms, train_data_transforms
+# from data import data_transforms, train_data_transforms
 
-train_loader = torch.utils.data.DataLoader(
-    datasets.ImageFolder(args.data + '/train_images',
-                         transform=train_data_transforms),
-    batch_size=args.batch_size, shuffle=True, num_workers=1)
+# train_loader = torch.utils.data.DataLoader(
+#     datasets.ImageFolder(args.data + '/train_images',
+#                          transform=train_data_transforms),
+#     batch_size=args.batch_size, shuffle=True, num_workers=1)
+# val_loader = torch.utils.data.DataLoader(
+#     datasets.ImageFolder(args.data + '/val_images',
+#                          transform=data_transforms),
+#     batch_size=args.batch_size, shuffle=False, num_workers=1)
+
+from dataset import get_birds
+
+train_labeled_set, train_unlabeled_set, val_set = get_birds(
+    args, train_labeled_path='/train_images', train_unlabeled_path='/.',
+    val_path='/val_images'
+)
+train_labeled_loader = torch.utils.data.DataLoader(
+    train_labeled_set, batch_size=args.batch_size, shuffle=True, num_workers=1
+)
+train_unlabeled_loader = torch.utils.data.DataLoader(
+    train_unlabeled_set, batch_size=args.batch_size*args.mu, shuffle=True, num_workers=1
+)
 val_loader = torch.utils.data.DataLoader(
-    datasets.ImageFolder(args.data + '/val_images',
-                         transform=data_transforms),
-    batch_size=args.batch_size, shuffle=False, num_workers=1)
+    val_set, batch_size=args.batch_size, shuffle=False, num_workers=1
+)
 
 # Neural network and optimizer
 # We define neural net in model.py so that it can be reused by the evaluate.py script
@@ -68,7 +91,7 @@ optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, we
 
 def train(epoch):
     model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
+    for batch_idx, (data, target) in enumerate(train_labeled_loader):
         if use_cuda:
             data, target = data.cuda(), target.cuda()
         optimizer.zero_grad()
@@ -79,12 +102,51 @@ def train(epoch):
         optimizer.step()
         if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                100. * batch_idx / len(train_loader), loss.data.item()))
+                epoch, batch_idx * len(data), len(train_labeled_loader.dataset),
+                100. * batch_idx / len(train_labeled_loader), loss.data.item()))
+    writer.add_scalar("Loss/train", loss.data.item(), epoch)
+    del loss
+    writer.flush()
+
+
+def trainFixMatch(epoch):
+    model.train()
+    for batch_idx, (labeled_batch, unlabeled_batch) in enumerate(zip(train_labeled_loader, train_unlabeled_loader)):
+        optimizer.zero_grad()
+        labeled_data, target = labeled_batch
+        unlabeled_data, _ = unlabeled_batch
+        weak, strong = unlabeled_data
+        if use_cuda:
+            labeled_data, target = labeled_data.cuda(), target.cuda()
+            weak, strong = weak.cuda(), strong.cuda()
+        inp = torch.cat((labeled_data, weak, strong))
+        out = model(inp)
+        out_labeled = out[:args.batch_size]
+        out_weak, out_strong = out[args.batch_size:].chunk(2)
+
+        criterion = torch.nn.CrossEntropyLoss(reduction='none')
+
+        loss_spv = criterion(out_labeled, target).mean()
+
+        pseudo_probas = torch.softmax(out_weak.detach(), dim=-1)
+        max_probs, targets_pseudo = torch.max(pseudo_probas, dim=-1)
+        mask = max_probs.ge(args.threshold).float()
+
+        loss_unspv = (criterion(out_strong, targets_pseudo) * mask).mean()
+
+        loss = loss_spv + args.lambda_u * loss_unspv
+        loss.backward()
+        optimizer.step()
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.2f}\tLoss_s: {:.2f}\tLoss_u: {:.2f}\tMask: {:.2f}'.format(
+                epoch, batch_idx * len(labeled_data), len(train_labeled_loader.dataset),
+                100. * batch_idx / len(train_labeled_loader),
+                loss.data.item(), loss_spv.data.item(), loss_unspv.data.item(), mask.mean().item()))
     writer.add_scalar("Loss/train", loss.data.item(), epoch)
     writer.flush()
 
 
+@torch.no_grad()
 def validation(epoch, num_embeds=None, confusion_mat=True):
     model.eval()
     validation_loss = 0
@@ -142,7 +204,7 @@ def validation(epoch, num_embeds=None, confusion_mat=True):
 
 
 for epoch in range(1, args.epochs + 1):
-    train(epoch)
+    trainFixMatch(epoch)
     val_score = validation(epoch, num_embeds=None, confusion_mat=True)
     model_file = args.experiment + '/model_' + str(epoch) + '.pth'
     utils.save_ckpt_auto_rm(model, model_file, val_score, max_num=5)

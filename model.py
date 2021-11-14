@@ -38,6 +38,8 @@ class ResNet(nn.Module):
             param.requires_grad = False
         for param in self.net.layer4.parameters():
             param.requires_grad = True
+        for param in self.net.layer3.parameters():
+            param.requires_grad = True
         num_feats_extr = self.net.fc.in_features
         self.net.fc = nn.Sequential(
             nn.Linear(num_feats_extr, NCLASSES),
