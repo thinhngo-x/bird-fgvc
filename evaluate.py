@@ -1,26 +1,27 @@
 import argparse
+from timm.models.factory import create_model
 from tqdm import tqdm
 import os
 import PIL.Image as Image
 
 import torch
 
-from model import Net, ResNet
+from model import NCLASSES, TimmModel
 
 parser = argparse.ArgumentParser(description='RecVis A3 evaluation script')
 parser.add_argument('--data', type=str, default='bird_dataset', metavar='D',
                     help="folder where data is located. test_images/ need to be found in the folder")
 parser.add_argument('--model', type=str, metavar='M',
                     help="the model file to be evaluated. Usually it is of the form model_X.pth")
-parser.add_argument('--outfile', type=str, default='experiment/kaggle.csv', metavar='D',
+parser.add_argument('--outfile', type=str, default='ckpts/kaggle.csv', metavar='D',
                     help="name of the output csv file")
 
 args = parser.parse_args()
 use_cuda = torch.cuda.is_available()
 
 state_dict = torch.load(args.model)
-model = ResNet('resnext101_32x8d', pretrained=False)
-model.load_state_dict(state_dict)
+model = TimmModel('swin_large_patch4_window12_384', False, args, 0)
+model.load_state_dict(state_dict['state_dict'])
 model.eval()
 if use_cuda:
     print('Using GPU')
@@ -28,7 +29,7 @@ if use_cuda:
 else:
     print('Using CPU')
 
-from data import data_transforms
+from dataset import data_transforms
 
 test_dir = args.data + '/test_images/mistery_category'
 

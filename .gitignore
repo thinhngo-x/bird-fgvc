@@ -3,3 +3,6 @@ experiment
 runs
 __pycache__
 fixmatch
+ckpts
+job
+lightning_logs

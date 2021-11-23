@@ -15,6 +15,12 @@ pip install -r requirements.txt
 We will be using a dataset containing 200 different classes of birds adapted from the [CUB-200-2011 dataset](http://www.vision.caltech.edu/visipedia/CUB-200-2011.html).
 Download the training/validation/test images from [here](https://www.di.ens.fr/willow/teaching/recvis18orig/assignment3/bird_dataset.zip). The test image labels are not provided.
 
+#### Distributed training
+
+```bash
+sbatch submit.sh experiment_name
+```
+
 #### Training and validating your model
 Run the script `main.py` to train your model.
 
@@ -32,7 +38,3 @@ python evaluate.py --data [data_dir] --model [model_file]
 ```
 
 That generates a file `kaggle.csv` that you can upload to the private kaggle competition website.
-
-#### Acknowledgments
-Adapted from Rob Fergus and Soumith Chintala https://github.com/soumith/traffic-sign-detection-homework.<br/>
-Adaptation done by Gul Varol: https://github.com/gulvarol

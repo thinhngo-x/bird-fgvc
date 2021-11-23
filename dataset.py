@@ -3,16 +3,17 @@ from torchvision import datasets
 import numpy as np
 
 
-IMG_SIZE = 224
+IMG_SIZE = 384
+TEST_RESIZE = 448
 CROP_PADDING = int(IMG_SIZE * 0.125)
 NUM_AUG_OPS = 2
-MAGNITUDE = 8
+MAGNITUDE = 10
 MEAN = [0.485, 0.456, 0.406]
 STD = [0.229, 0.224, 0.225]
 
 
 data_transforms = transforms.Compose([
-    transforms.Resize(IMG_SIZE),
+    transforms.Resize(TEST_RESIZE),
     transforms.CenterCrop(IMG_SIZE),
     transforms.ToTensor(),
     transforms.Normalize(MEAN, STD)
@@ -22,20 +23,16 @@ data_transforms = transforms.Compose([
 class TransformFixMatch(object):
     def __init__(self, mean, std) -> None:
         self.weak = transforms.Compose([
-            transforms.Resize(IMG_SIZE),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(
-                IMG_SIZE,
-                padding=CROP_PADDING,
-                padding_mode="reflect")
+            transforms.Resize(TEST_RESIZE),
+            transforms.RandomCrop(IMG_SIZE),
+            # transforms.RandomResizedCrop(IMG_SIZE),
+            transforms.RandomHorizontalFlip()
         ])
         self.strong = transforms.Compose([
-            transforms.Resize(IMG_SIZE),
+            transforms.Resize(TEST_RESIZE),
+            transforms.RandomCrop(IMG_SIZE),
+            # transforms.RandomResizedCrop(IMG_SIZE),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(
-                IMG_SIZE,
-                padding=CROP_PADDING,
-                padding_mode="reflect"),
             transforms.RandAugment(NUM_AUG_OPS, MAGNITUDE)
         ])
         self.normalize = transforms.Compose([
@@ -53,7 +50,7 @@ class BirdDataset(datasets.ImageFolder):
     def __init__(self, root, idxs, transform):
         super().__init__(root, transform=transform)
         if idxs is not None:
-            self.imgs = np.array(self.imgs)[idxs]
+            self.samples = np.array(self.samples)[idxs]
             self.targets = np.array(self.targets)[idxs]
     
     def __getitem__(self, index: int):
@@ -62,12 +59,11 @@ class BirdDataset(datasets.ImageFolder):
 
 def get_birds(args, train_labeled_path, train_unlabeled_path, val_path):
     transforms_labeled = transforms.Compose([
-        transforms.Resize(IMG_SIZE),
+        transforms.Resize(TEST_RESIZE),
+        transforms.RandomCrop(IMG_SIZE),
+        # transforms.RandomResizedCrop(IMG_SIZE,scale=(0.2,1.0),ratio=(0.9,1.1)),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(
-            IMG_SIZE,
-            padding=CROP_PADDING,
-            padding_mode="reflect"),
+        transforms.AutoAugment(transforms.AutoAugmentPolicy.IMAGENET),
         transforms.ToTensor(),
         transforms.Normalize(MEAN, STD)
     ])
@@ -78,7 +74,8 @@ def get_birds(args, train_labeled_path, train_unlabeled_path, val_path):
 
     train_unlabeled_dataset = datasets.ImageFolder(args.data + train_unlabeled_path)
 
-    idxs = expand_idxs(train_unlabeled_dataset.targets, len(train_labeled_dataset.targets)*args.mu)
+    idxs = resample_idxs(train_unlabeled_dataset.targets, len(train_labeled_dataset.targets)*args.mu)
+    assert len(idxs) == len(train_labeled_dataset.targets)*args.mu
     train_unlabeled_dataset = BirdDataset(
         args.data + train_unlabeled_path, idxs,
         transform=TransformFixMatch(MEAN, STD)
@@ -91,10 +88,11 @@ def get_birds(args, train_labeled_path, train_unlabeled_path, val_path):
     return train_labeled_dataset, train_unlabeled_dataset, val_dataset
 
 
-def expand_idxs(labels_fewer, num_labels_more):
-    assert num_labels_more > len(labels_fewer)
-    diff = num_labels_more - len(labels_fewer)
-    labels_fewer = np.array(labels_fewer)
-    idxs = np.array(range(len(labels_fewer)))
-    expand = np.random.choice(idxs, diff, replace=True)
-    return np.concatenate((idxs, expand))
+def resample_idxs(labels, num_labels_final):
+    diff = num_labels_final - len(labels)
+    idxs = np.array(range(len(labels)))
+    if diff > 0:
+        expand = np.random.choice(idxs, diff, replace=True)
+        return np.concatenate((idxs, expand))
+    else:
+        return np.random.choice(idxs, num_labels_final, replace=False)
