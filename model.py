@@ -72,7 +72,7 @@ class TimmModel(pl.LightningModule):
     
     def train_dataloader(self):
         train_labeled_set, train_unlabeled_set, _ = get_birds(
-            self.args, train_labeled_path='/train_images', train_unlabeled_path='/.',
+            self.args, train_labeled_path='/train_images', train_unlabeled_path='/external',
             val_path='/val_images'
         )
         if self.args.mode == 'supervise':
